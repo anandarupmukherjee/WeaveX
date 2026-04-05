@@ -1,0 +1,39 @@
+# Web framework
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+python-multipart==0.0.20
+websockets==15.0.1
+
+# LLM client (Ollama uses OpenAI-compatible API)
+openai==1.82.0
+httpx==0.28.1
+
+# Document parsing
+unstructured[pdf,docx]==0.17.2
+python-docx==1.1.2
+pymupdf==1.25.5
+
+# Knowledge graph
+neo4j==5.28.1
+
+# Vector store + embeddings
+chromadb==0.6.3
+sentence-transformers==4.1.0
+
+# Task queue & cache
+redis==5.3.0
+celery==5.5.1
+
+# Data models
+pydantic==2.11.3
+pydantic-settings==2.9.1
+
+# Utilities
+python-dotenv==1.1.0
+structlog==25.3.0
+tenacity==9.1.2
+
+# Testing
+pytest==8.4.0
+pytest-asyncio==1.0.0
+httpx==0.28.1

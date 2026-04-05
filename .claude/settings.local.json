@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:5001/api/extract/ext_645e27708429/status)"
+    ]
+  }
+}
