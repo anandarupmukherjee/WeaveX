@@ -1,9 +1,41 @@
 services:
+  # ---------- Backend (FastAPI) ----------
+  backend:
+    build: ./backend
+    ports:
+      - "5001:5001"
+    env_file:
+      - ./backend/.env
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - LLM_BASE_URL=http://host.docker.internal:11434/v1
+      - CORS_ORIGINS=http://localhost,http://localhost:80,http://localhost:5173
+    volumes:
+      - backend_data:/app/data
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------- Frontend (Nginx + React) ----------
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ---------- Neo4j (Knowledge Graph) ----------
   neo4j:
     image: neo4j:5-community
     ports:
-      - "7474:7474"   # Browser
-      - "7687:7687"   # Bolt
+      - "7474:7474"
+      - "7687:7687"
     environment:
       - NEO4J_AUTH=neo4j/digitwin_dev
       - NEO4J_PLUGINS=["apoc"]
@@ -14,6 +46,7 @@ services:
       interval: 10s
       retries: 5
 
+  # ---------- Redis (Cache + Pub/Sub) ----------
   redis:
     image: redis:7-alpine
     ports:
@@ -26,5 +59,6 @@ services:
       retries: 3
 
 volumes:
+  backend_data:
   neo4j_data:
   redis_data:
