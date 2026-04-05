@@ -1,17 +1,16 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
 import { Upload, FileText } from "lucide-react";
 import toast from "react-hot-toast";
-import { submitExtractionJob, pollJobStatus, fetchExtractionResult } from "../../api/client";
+import { submitExtractionJob } from "../../api/client";
 import { useAppStore } from "../../stores/appStore";
 
 export default function UploadPanel() {
   const [files, setFiles] = useState<File[]>([]);
   const [description, setDescription] = useState("");
-  const setExtraction = useAppStore((s) => s.setExtraction);
   const setPhase = useAppStore((s) => s.setPhase);
   const setAnalysisProgress = useAppStore((s) => s.setAnalysisProgress);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const setActiveJobId = useAppStore((s) => s.setActiveJobId);
 
   const onDrop = useCallback((accepted: File[]) => {
     setFiles((prev) => [...prev, ...accepted]);
@@ -30,42 +29,17 @@ export default function UploadPanel() {
     if (!files.length) return toast.error("Upload at least one file");
     if (!description.trim()) return toast.error("Describe what you want to model");
 
-    setPhase("analysing");
     setAnalysisProgress("uploading", "Uploading documents...");
+    setPhase("analysing");
 
-    let jobId: string;
     try {
       const job = await submitExtractionJob(files, description);
-      jobId = job.job_id;
+      setActiveJobId(job.job_id);
     } catch (err: any) {
       console.error(err);
       toast.error("Upload failed — is the backend running?");
       setPhase("upload");
-      return;
     }
-
-    // Poll for progress every 5 seconds
-    pollRef.current = setInterval(async () => {
-      try {
-        const status = await pollJobStatus(jobId);
-        const stage = status.stage ?? "";
-        const detail = status.detail ?? "Processing...";
-        setAnalysisProgress(stage, detail);
-
-        if (status.status === "complete") {
-          clearInterval(pollRef.current!);
-          const result = await fetchExtractionResult(jobId);
-          setExtraction(result.extraction_id, result.data);
-          toast.success(`Extracted ${result.data.agents.length} agents`);
-        } else if (status.status === "failed") {
-          clearInterval(pollRef.current!);
-          toast.error(status.error || "Analysis failed");
-          setPhase("upload");
-        }
-      } catch (err) {
-        console.error("Poll error:", err);
-      }
-    }, 5_000);
   };
 
   return (

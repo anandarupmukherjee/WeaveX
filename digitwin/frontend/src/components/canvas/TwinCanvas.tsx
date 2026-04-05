@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useEffect } from "react";
 import {
   ReactFlow,
   Background,
@@ -12,6 +12,7 @@ import {
   Panel,
 } from "@xyflow/react";
 import type { TwinSpec } from "../../types";
+import type { SimInsights } from "../panels/SimAnalyticsPanel";
 import { useAppStore } from "../../stores/appStore";
 import AgentNode from "./AgentNode";
 import AgentPanel from "../panels/AgentPanel";
@@ -36,13 +37,22 @@ function getColor(entityType: string): string {
   return TYPE_COLORS[entityType] || "#6366f1";
 }
 
+const PRIORITY_STYLES: Record<string, string> = {
+  high: "border-red-600/60 bg-red-950/60",
+  medium: "border-amber-600/60 bg-amber-950/50",
+  low: "border-zinc-600/60 bg-zinc-900/70",
+};
+
 interface Props {
   twinSpec: TwinSpec;
+  insights?: SimInsights | null;
+  agentKpiTrends?: Record<string, "up" | "down" | "neutral">;
 }
 
-export default function TwinCanvas({ twinSpec }: Props) {
+export default function TwinCanvas({ twinSpec, insights, agentKpiTrends }: Props) {
   const selectedAgentId = useAppStore((s) => s.selectedAgentId);
   const selectAgent = useAppStore((s) => s.selectAgent);
+  const activeAgentIds = useAppStore((s) => s.activeAgentIds);
   const selectedAgent = twinSpec.agents.find((a) => a.id === selectedAgentId);
 
   // Convert agents to React Flow nodes — arrange in a circle
@@ -64,6 +74,8 @@ export default function TwinCanvas({ twinSpec }: Props) {
         data: {
           agent,
           color: getColor(agent.entity_type),
+          isActive: false,
+          kpiTrend: "neutral" as const,
         },
       };
     });
@@ -97,6 +109,48 @@ export default function TwinCanvas({ twinSpec }: Props) {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Update node data when active agents or KPI trends change (features 1 & 2)
+  useEffect(() => {
+    setNodes((prev) =>
+      prev.map((n) => ({
+        ...n,
+        data: {
+          ...n.data,
+          isActive: activeAgentIds.has(n.id),
+          kpiTrend: agentKpiTrends?.[n.id] ?? "neutral",
+        },
+      }))
+    );
+  }, [activeAgentIds, agentKpiTrends, setNodes]);
+
+  // Highlight edges for selected agent (feature 9)
+  useEffect(() => {
+    if (!selectedAgentId) {
+      setEdges((prev) =>
+        prev.map((e) => ({
+          ...e,
+          animated: false,
+          style: { ...e.style, stroke: "#3f3f46" },
+        }))
+      );
+      return;
+    }
+    setEdges((prev) =>
+      prev.map((e) => {
+        const connected = e.source === selectedAgentId || e.target === selectedAgentId;
+        return {
+          ...e,
+          animated: connected,
+          style: {
+            ...e.style,
+            stroke: connected ? "#6366f1" : "#27272a",
+            strokeWidth: connected ? 3 : 1,
+          },
+        };
+      })
+    );
+  }, [selectedAgentId, setEdges]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
@@ -159,15 +213,46 @@ export default function TwinCanvas({ twinSpec }: Props) {
             )}
           </div>
         </Panel>
+
+        {/* Insight cards on canvas after simulation (feature 6) */}
+        {insights && (
+          <Panel position="bottom-right">
+            <div className="space-y-2 max-w-xs max-h-[50vh] overflow-y-auto pr-1">
+              {/* Summary card */}
+              <div className="bg-zinc-900/95 backdrop-blur-sm rounded-lg px-4 py-3 border border-indigo-700/50 text-xs">
+                <p className="text-indigo-400 font-semibold mb-1">Summary</p>
+                <p className="text-zinc-300 leading-relaxed">{insights.summary}</p>
+              </div>
+              {/* Recommendation cards */}
+              {insights.recommendations?.map((r, i) => (
+                <div key={i} className={`backdrop-blur-sm rounded-lg px-4 py-3 border text-xs ${PRIORITY_STYLES[r.priority] ?? PRIORITY_STYLES.low}`}>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className={`w-2 h-2 rounded-full ${r.priority === "high" ? "bg-red-400" : r.priority === "medium" ? "bg-amber-400" : "bg-zinc-500"}`} />
+                    <span className="font-semibold text-zinc-200">{r.title}</span>
+                  </div>
+                  <p className="text-zinc-400 leading-relaxed">{r.detail}</p>
+                </div>
+              ))}
+              {/* Outlook card */}
+              {insights.outlook && (
+                <div className="bg-zinc-900/95 backdrop-blur-sm rounded-lg px-4 py-3 border border-blue-700/50 text-xs">
+                  <p className="text-blue-400 font-semibold mb-1">Outlook</p>
+                  <p className="text-zinc-300 leading-relaxed">{insights.outlook}</p>
+                </div>
+              )}
+            </div>
+          </Panel>
+        )}
       </ReactFlow>
 
-      {/* Agent detail panel (slides in from right) */}
+      {/* Agent detail panel — slides in from right (feature 9: shows goals, tools, connections) */}
       {selectedAgent && (
         <AgentPanel
           agent={selectedAgent}
           tools={twinSpec.tools.filter((t) =>
             selectedAgent.tool_names.includes(t.name)
           )}
+          allAgents={twinSpec.agents}
           onClose={() => selectAgent(null)}
         />
       )}

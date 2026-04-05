@@ -48,6 +48,7 @@ class DomainAnalyser:
         documents: list[str],
         user_description: str,
         on_progress: callable = None,
+        on_graph_update: callable = None,
     ) -> TwinSpec:
         combined_text = "\n\n---\n\n".join(documents)
         chunks = _chunks(combined_text)
@@ -62,7 +63,7 @@ class DomainAnalyser:
         # --- Pass 1: Ontology (all chunks, merge) ---
         if on_progress:
             on_progress("ontology", "Extracting domain ontology...")
-        ontology = await self._extract_ontology_chunked(chunks, intent)
+        ontology = await self._extract_ontology_chunked(chunks, intent, on_graph_update)
         logger.info("Ontology extracted",
                     entity_types=len(ontology.entity_types),
                     relation_types=len(ontology.relation_types))
@@ -70,7 +71,7 @@ class DomainAnalyser:
         # --- Pass 2: Agents (all chunks, merge) ---
         if on_progress:
             on_progress("agents", "Identifying agents and personas...")
-        agents = await self._extract_agents_chunked(chunks, intent, ontology)
+        agents = await self._extract_agents_chunked(chunks, intent, ontology, on_graph_update)
         logger.info("Agents extracted", count=len(agents))
 
         # --- Pass 3: Interactions ---
@@ -120,7 +121,7 @@ model_type must be one of: process, organisation, market, system"""
     # Pass 1: Ontology (chunked)
     # ================================================================
 
-    async def _extract_ontology_chunked(self, chunks: list[str], intent: IntentSpec) -> Ontology:
+    async def _extract_ontology_chunked(self, chunks: list[str], intent: IntentSpec, on_graph_update: callable = None) -> Ontology:
         all_entity_types: dict[str, EntityType] = {}
         all_relation_types: dict[str, RelationType] = {}
         summary = ""
@@ -152,6 +153,19 @@ Entities must be concrete actors/objects. No abstract concepts."""
                         all_relation_types[name] = RelationType(**rt)
                 if not summary:
                     summary = result.get("analysis_summary", "")
+                # Emit live graph update
+                if on_graph_update:
+                    on_graph_update({
+                        "entity_types": [
+                            {"name": et.name, "description": et.description}
+                            for et in all_entity_types.values()
+                        ],
+                        "relation_types": [
+                            {"name": rt.name, "source_type": rt.source_type, "target_type": rt.target_type}
+                            for rt in all_relation_types.values()
+                        ],
+                        "agents": [],
+                    })
             except Exception as e:
                 logger.warning("Ontology chunk failed", chunk=i, error=str(e))
 
@@ -166,7 +180,8 @@ Entities must be concrete actors/objects. No abstract concepts."""
     # ================================================================
 
     async def _extract_agents_chunked(
-        self, chunks: list[str], intent: IntentSpec, ontology: Ontology
+        self, chunks: list[str], intent: IntentSpec, ontology: Ontology,
+        on_graph_update: callable = None,
     ) -> list[AgentSpec]:
         entity_type_names = [et.name for et in ontology.entity_types]
         all_raw_agents: dict[str, dict] = {}  # name → raw dict, dedup by name
@@ -194,36 +209,78 @@ Respond with ONLY valid JSON:
                     name = raw.get("name", "")
                     if name and name not in all_raw_agents:
                         all_raw_agents[name] = raw
+                # Emit live graph with agents so far
+                if on_graph_update:
+                    on_graph_update({
+                        "entity_types": [
+                            {"name": et.name, "description": et.description}
+                            for et in ontology.entity_types
+                        ],
+                        "relation_types": [
+                            {"name": rt.name, "source_type": rt.source_type, "target_type": rt.target_type}
+                            for rt in ontology.relation_types
+                        ],
+                        "agents": [
+                            {
+                                "name": raw.get("name", ""),
+                                "entity_type": raw.get("entity_type", ""),
+                                "relationships": [
+                                    {"target": r.get("target_agent_name", ""), "type": r.get("relation_type", "")}
+                                    for r in raw.get("relationships", [])
+                                ],
+                            }
+                            for raw in all_raw_agents.values()
+                        ],
+                    })
             except Exception as e:
                 logger.warning("Agents chunk failed", chunk=i, error=str(e))
 
         # Build AgentSpec objects
         agents = []
         name_to_id: dict[str, str] = {}
+
+        def _ensure_list(val) -> list:
+            """Coerce a value to a list — LLM sometimes returns a string."""
+            if isinstance(val, list):
+                return val
+            if isinstance(val, str) and val:
+                return [val]
+            return []
+
         for raw in all_raw_agents.values():
-            agent_id = f"agent_{uuid.uuid4().hex[:8]}"
-            name_to_id[raw["name"]] = agent_id
-            relationships = [
-                Relationship(
-                    target_agent_id=rel.get("target_agent_name", ""),
-                    relation_type=rel.get("relation_type", "INTERACTS_WITH"),
-                    description=rel.get("description", ""),
-                    weight=rel.get("weight", 1.0),
-                )
-                for rel in raw.get("relationships", [])
-            ]
-            agents.append(AgentSpec(
-                id=agent_id,
-                name=raw["name"],
-                entity_type=raw.get("entity_type", "Unknown"),
-                persona=raw.get("persona", ""),
-                goals=raw.get("goals", []),
-                constraints=raw.get("constraints", []),
-                tool_names=raw.get("tool_names", []),
-                behaviour=BehaviourParams(**raw.get("behaviour", {})),
-                relationships=relationships,
-                properties=raw.get("properties", {}),
-            ))
+            try:
+                agent_id = f"agent_{uuid.uuid4().hex[:8]}"
+                name_to_id[raw["name"]] = agent_id
+                rels_raw = raw.get("relationships", [])
+                if not isinstance(rels_raw, list):
+                    rels_raw = []
+                relationships = [
+                    Relationship(
+                        target_agent_id=rel.get("target_agent_name", ""),
+                        relation_type=rel.get("relation_type", "INTERACTS_WITH"),
+                        description=rel.get("description", ""),
+                        weight=float(rel.get("weight", 1.0)),
+                    )
+                    for rel in rels_raw
+                    if isinstance(rel, dict)
+                ]
+                beh_raw = raw.get("behaviour", {})
+                if not isinstance(beh_raw, dict):
+                    beh_raw = {}
+                agents.append(AgentSpec(
+                    id=agent_id,
+                    name=raw["name"],
+                    entity_type=raw.get("entity_type", "Unknown"),
+                    persona=raw.get("persona", "") if isinstance(raw.get("persona"), str) else "",
+                    goals=_ensure_list(raw.get("goals")),
+                    constraints=_ensure_list(raw.get("constraints")),
+                    tool_names=_ensure_list(raw.get("tool_names")),
+                    behaviour=BehaviourParams(**beh_raw),
+                    relationships=relationships,
+                    properties=raw.get("properties", {}) if isinstance(raw.get("properties"), dict) else {},
+                ))
+            except Exception as e:
+                logger.warning("Skipping malformed agent", name=raw.get("name"), error=str(e))
 
         # Resolve relationship target names → IDs
         for agent in agents:

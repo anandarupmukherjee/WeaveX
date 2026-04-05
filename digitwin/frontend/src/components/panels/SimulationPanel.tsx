@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import type { TwinSpec } from "../../types";
 import type { SimEvent, SimInsights } from "./SimAnalyticsPanel";
+import { useAppStore } from "../../stores/appStore";
 import api from "../../api/client";
 
 interface KpiHistory {
@@ -10,13 +11,20 @@ interface KpiHistory {
 interface Props {
   twinSpec: TwinSpec;
   extractionId: string;
-  // Lift state up to parent so analytics panel can share it
   onEventsChange: (events: SimEvent[]) => void;
   onKpiChange: (kpi: KpiHistory) => void;
   onInsights: (insights: SimInsights) => void;
   onRoundChange: (round: number, total: number) => void;
   onRunningChange: (running: boolean) => void;
 }
+
+const TIMELINE_PRESETS = [
+  { label: "Quarterly", value: "Q1-Q4" },
+  { label: "Monthly", value: "monthly" },
+  { label: "Weekly", value: "weekly" },
+  { label: "Annual", value: "annual" },
+  { label: "5-Year", value: "5-year" },
+];
 
 export default function SimulationPanel({
   twinSpec, extractionId,
@@ -29,9 +37,14 @@ export default function SimulationPanel({
   const [totalRounds, setTotalRounds] = useState(10);
   const [scenarioInput, setScenarioInput] = useState("");
   const [showScenario, setShowScenario] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const eventsRef = useRef<SimEvent[]>([]);
   const kpiRef = useRef<KpiHistory>({});
+
+  const simTimeline = useAppStore((s) => s.simTimeline);
+  const setSimTimeline = useAppStore((s) => s.setSimTimeline);
+  const setActiveAgent = useAppStore((s) => s.setActiveAgent);
 
   const setRunningState = (r: boolean) => {
     setRunning(r);
@@ -49,6 +62,11 @@ export default function SimulationPanel({
       if (ev.type === "round_start") {
         setRound(ev.round ?? 0);
         onRoundChange(ev.round ?? 0, total);
+      }
+
+      // Feature 1: blink agent on canvas when it acts
+      if (ev.type === "agent_action" && ev.agent_id) {
+        setActiveAgent(ev.agent_id);
       }
 
       if (ev.type === "kpi_update" && ev.kpis) {
@@ -80,6 +98,7 @@ export default function SimulationPanel({
       const res = await api.post("/simulation/start", {
         extraction_id: extractionId,
         rounds: totalRounds,
+        timeline: simTimeline || undefined,
       });
       const id = res.data.simulation_id;
       setSimId(id);
@@ -116,11 +135,16 @@ export default function SimulationPanel({
     wsRef.current?.close();
   };
 
+  // Feature 4: fix inject — use correct API path
   const handleInject = async () => {
     if (!simId || !scenarioInput.trim()) return;
-    await api.post(`/simulation/${simId}/inject-event`, { event: scenarioInput });
-    setScenarioInput("");
-    setShowScenario(false);
+    try {
+      await api.post(`/simulation/${simId}/inject-event`, { event: scenarioInput });
+      setScenarioInput("");
+      setShowScenario(false);
+    } catch (err) {
+      console.error("Inject failed:", err);
+    }
   };
 
   return (
@@ -146,6 +170,44 @@ export default function SimulationPanel({
             </div>
           )}
         </div>
+
+        {/* Timeline selector (feature 7) */}
+        {!running && (
+          <div className="mb-3">
+            <button
+              onClick={() => setShowTimeline(!showTimeline)}
+              className="text-xs text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1"
+            >
+              <span>Timeline: {simTimeline || "auto (from document)"}</span>
+              <span className="text-zinc-600">{showTimeline ? "▲" : "▼"}</span>
+            </button>
+            {showTimeline && (
+              <div className="mt-2 space-y-2">
+                <div className="flex flex-wrap gap-1.5">
+                  {TIMELINE_PRESETS.map((p) => (
+                    <button
+                      key={p.value}
+                      onClick={() => setSimTimeline(p.value)}
+                      className={`text-[10px] px-2 py-1 rounded transition-colors ${
+                        simTimeline === p.value
+                          ? "bg-indigo-600 text-white"
+                          : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  value={simTimeline}
+                  onChange={(e) => setSimTimeline(e.target.value)}
+                  placeholder="Custom: e.g. Q1-Q4 2025, 2024-2029..."
+                  className="w-full text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 focus:outline-none focus:border-indigo-500 placeholder-zinc-600"
+                />
+              </div>
+            )}
+          </div>
+        )}
 
         {running && (
           <div className="w-full bg-zinc-800 rounded-full h-1 mb-3">

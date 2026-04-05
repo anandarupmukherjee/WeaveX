@@ -135,6 +135,7 @@ async def _run_extraction(job_id: str, saved_paths: list[str], description: str)
             documents=documents,
             user_description=description,
             on_progress=lambda stage, detail: _update_progress(job_id, stage, detail),
+            on_graph_update=lambda graph: _update_live_graph(job_id, graph),
         )
 
         result_dict = twin_spec.model_dump()
@@ -159,6 +160,11 @@ def _update_progress(job_id: str, stage: str, detail: str):
     if job_id in _jobs:
         _jobs[job_id]["stage"] = stage
         _jobs[job_id]["detail"] = detail
+
+
+def _update_live_graph(job_id: str, graph_data: dict):
+    if job_id in _jobs:
+        _jobs[job_id]["live_graph"] = graph_data
 
 
 @router.post("/upload-and-analyse")
@@ -194,7 +200,7 @@ async def upload_and_analyse(
     if not saved_paths:
         raise HTTPException(400, "No supported files found in upload")
 
-    _jobs[job_id] = {"status": "pending", "stage": "queued", "detail": "Job queued", "result": None, "error": None}
+    _jobs[job_id] = {"status": "pending", "stage": "queued", "detail": "Job queued", "result": None, "error": None, "live_graph": None}
     background_tasks.add_task(_run_extraction, job_id, saved_paths, description)
 
     return {"job_id": job_id, "status": "pending"}
@@ -222,13 +228,16 @@ async def get_job_status(job_id: str):
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    return {
+    resp: dict = {
         "job_id": job_id,
         "status": job["status"],
         "stage": job.get("stage"),
         "detail": job.get("detail"),
         "error": job.get("error"),
     }
+    if job.get("live_graph"):
+        resp["live_graph"] = job["live_graph"]
+    return resp
 
 
 @router.get("/{job_id}")
@@ -263,7 +272,7 @@ async def analyse_text(
     text_file = upload_dir / "input.txt"
     text_file.write_text(text, encoding="utf-8")
 
-    _jobs[job_id] = {"status": "pending", "stage": "queued", "detail": "Job queued", "result": None, "error": None}
+    _jobs[job_id] = {"status": "pending", "stage": "queued", "detail": "Job queued", "result": None, "error": None, "live_graph": None}
     background_tasks.add_task(_run_extraction, job_id, [str(text_file)], description)
 
     return {"job_id": job_id, "status": "pending"}

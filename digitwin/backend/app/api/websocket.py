@@ -35,12 +35,26 @@ async def simulation_ws(websocket: WebSocket, sim_id: str):
             msg_type = data.get("type", "")
 
             if msg_type == "tune_behaviour":
-                # TODO: Forward to simulation engine
+                # Forward to simulation engine if available
+                from ..api.simulation import _simulations
+                engine = _simulations.get(sim_id)
+                if engine:
+                    agent_id = data.get("agent_id", "")
+                    params = data.get("params", {})
+                    agent = engine.agent_by_id.get(agent_id)
+                    if agent:
+                        for k, v in params.items():
+                            if hasattr(agent.behaviour, k):
+                                setattr(agent.behaviour, k, float(v))
                 await websocket.send_json({
                     "type": "ack",
                     "message": f"Behaviour update received for agent {data.get('agent_id')}",
                 })
             elif msg_type == "inject_event":
+                from ..api.simulation import _simulations
+                engine = _simulations.get(sim_id)
+                if engine:
+                    await engine.inject_scenario(data.get("event", ""))
                 await websocket.send_json({
                     "type": "ack",
                     "message": "Event injection received",

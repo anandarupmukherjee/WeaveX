@@ -1,10 +1,11 @@
-import { X, Wrench, Target, Shield } from "lucide-react";
+import { X, Wrench, Target, Shield, Link2 } from "lucide-react";
 import type { AgentSpec, ToolSpec, BehaviourParams } from "../../types";
 import { useAppStore } from "../../stores/appStore";
 
 interface Props {
   agent: AgentSpec;
   tools: ToolSpec[];
+  allAgents?: AgentSpec[];
   onClose: () => void;
 }
 
@@ -16,11 +17,31 @@ const BEHAVIOUR_LABELS: Record<keyof BehaviourParams, { label: string; low: stri
   creativity: { label: "Creativity", low: "By the book", high: "Improviser" },
 };
 
-export default function AgentPanel({ agent, tools, onClose }: Props) {
+export default function AgentPanel({ agent, tools, allAgents, onClose }: Props) {
   const tuneBehaviour = useAppStore((s) => s.tuneBehaviour);
+  const selectAgent = useAppStore((s) => s.selectAgent);
   const overrides = useAppStore((s) => s.behaviourOverrides[agent.id] || {});
 
   const effectiveBehaviour = { ...agent.behaviour, ...overrides };
+
+  // Resolve connections to agent names
+  const connections = (agent.relationships || []).map((rel) => {
+    const peer = allAgents?.find((a) => a.id === rel.target_agent_id);
+    return {
+      ...rel,
+      peerName: peer?.name ?? rel.target_agent_id,
+      peerId: peer?.id ?? rel.target_agent_id,
+    };
+  });
+
+  // Find agents that connect TO this agent
+  const incomingConnections = (allAgents || [])
+    .filter((a) => a.id !== agent.id)
+    .flatMap((a) =>
+      (a.relationships || [])
+        .filter((r) => r.target_agent_id === agent.id)
+        .map((r) => ({ ...r, peerName: a.name, peerId: a.id }))
+    );
 
   return (
     <div className="absolute right-0 top-0 h-full w-96 bg-zinc-900 border-l border-zinc-800 shadow-2xl overflow-y-auto z-50">
@@ -101,6 +122,49 @@ export default function AgentPanel({ agent, tools, onClose }: Props) {
             )}
           </div>
         </section>
+
+        {/* Connections (feature 9) */}
+        {(connections.length > 0 || incomingConnections.length > 0) && (
+          <section>
+            <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <Link2 className="w-3 h-3" /> Connections ({connections.length + incomingConnections.length})
+            </h4>
+            <div className="space-y-1.5">
+              {connections.map((c, i) => (
+                <button
+                  key={`out-${i}`}
+                  onClick={() => selectAgent(c.peerId)}
+                  className="w-full text-left bg-zinc-800 hover:bg-zinc-750 rounded px-3 py-2 text-xs group transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-indigo-400">→</span>
+                    <span className="text-zinc-200 font-medium group-hover:text-indigo-300">{c.peerName}</span>
+                  </div>
+                  <p className="text-zinc-500 mt-0.5 ml-5">
+                    {c.relation_type.replace(/_/g, " ").toLowerCase()}
+                    {c.description ? ` — ${c.description}` : ""}
+                  </p>
+                </button>
+              ))}
+              {incomingConnections.map((c, i) => (
+                <button
+                  key={`in-${i}`}
+                  onClick={() => selectAgent(c.peerId)}
+                  className="w-full text-left bg-zinc-800 hover:bg-zinc-750 rounded px-3 py-2 text-xs group transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-emerald-400">←</span>
+                    <span className="text-zinc-200 font-medium group-hover:text-emerald-300">{c.peerName}</span>
+                  </div>
+                  <p className="text-zinc-500 mt-0.5 ml-5">
+                    {c.relation_type.replace(/_/g, " ").toLowerCase()}
+                    {c.description ? ` — ${c.description}` : ""}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Behaviour sliders */}
         <section>
