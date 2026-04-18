@@ -5,14 +5,20 @@ import uuid
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..api.extraction import _extractions, _jobs
 from ..api.websocket import broadcast_event
 from ..services.simulation.engine import SimulationEngine
+from ..services.simulation.distiller import distill_rules
+from ..services.simulation.exporter import build_export_archive
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+# Saved distilled packages (sim_id → package dict)
+_distilled: dict[str, dict] = {}
 
 # Active simulation engines
 _simulations: dict[str, SimulationEngine] = {}
@@ -124,3 +130,43 @@ async def simulation_log(sim_id: str):
     if not engine:
         raise HTTPException(404, "Simulation not found")
     return {"events": engine.event_log[-100:]}
+
+
+@router.post("/{sim_id}/distill")
+async def distill_simulation(sim_id: str):
+    """Distill a completed simulation into parameterized rules (one final LLM call)."""
+    engine = _simulations.get(sim_id)
+    if not engine:
+        raise HTTPException(404, "Simulation not found")
+    if engine.running:
+        raise HTTPException(400, "Simulation still running — wait for completion")
+
+    logger.info("Distilling rules", sim_id=sim_id)
+    package = await distill_rules(engine.twin_spec, engine.event_log, engine.kpi_history)
+    _distilled[sim_id] = package
+    logger.info("Distillation complete", sim_id=sim_id,
+                rules=len(package.get("distilled_rules", {}).get("agent_rules", [])))
+
+    return {
+        "success": True,
+        "sim_id": sim_id,
+        "agent_rules": len(package.get("distilled_rules", {}).get("agent_rules", [])),
+        "kpi_formulas": len(package.get("distilled_rules", {}).get("kpi_formulas", [])),
+    }
+
+
+@router.get("/{sim_id}/export")
+async def export_simulation(sim_id: str):
+    """Download the distilled simulation as a standalone Docker package (.tar.gz)."""
+    package = _distilled.get(sim_id)
+    if not package:
+        raise HTTPException(404, "No distilled package — call POST /distill first")
+
+    domain = package.get("metadata", {}).get("domain", "twin")
+    archive = build_export_archive(package)
+
+    return StreamingResponse(
+        iter([archive]),
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="twin-{domain}.tar.gz"'},
+    )

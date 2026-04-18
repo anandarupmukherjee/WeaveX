@@ -183,7 +183,7 @@ export default function App() {
       <LLMDebugPanel />
 
       {/* Main content */}
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-hidden min-h-0">
         {phase === "upload" && <UploadPanel />}
 
         {phase === "analysing" && (
@@ -281,7 +281,7 @@ export default function App() {
         )}
 
         {(phase === "canvas" || phase === "simulating") && twinSpec && (
-          <div className="h-full flex">
+          <div className="h-full flex" style={{ height: "100%" }}>
             {/* Left: Analytics panel — resizable (feature 5) */}
             <div
               className="border-r border-zinc-800 shrink-0 overflow-hidden"
@@ -303,7 +303,7 @@ export default function App() {
               onMouseDown={handleMouseDown}
             />
             {/* Centre: Canvas — with insights overlay (feature 6) */}
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 h-full">
               <TwinCanvas
                 twinSpec={twinSpec}
                 insights={!simRunning ? simInsights : null}

@@ -164,7 +164,7 @@ export default function TwinCanvas({ twinSpec, insights, agentKpiTrends }: Props
   }, [selectAgent]);
 
   return (
-    <div className="h-full w-full relative">
+    <div className="h-full w-full relative" style={{ height: "100%", width: "100%" }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}

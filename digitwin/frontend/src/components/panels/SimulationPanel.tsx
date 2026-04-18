@@ -38,6 +38,7 @@ export default function SimulationPanel({
   const [scenarioInput, setScenarioInput] = useState("");
   const [showScenario, setShowScenario] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
+  const [exporting, setExporting] = useState<"idle" | "distilling" | "downloading" | "done">("idle");
   const wsRef = useRef<WebSocket | null>(null);
   const eventsRef = useRef<SimEvent[]>([]);
   const kpiRef = useRef<KpiHistory>({});
@@ -144,6 +145,33 @@ export default function SimulationPanel({
       setShowScenario(false);
     } catch (err) {
       console.error("Inject failed:", err);
+    }
+  };
+
+  // Export: distill rules then download standalone container
+  const handleExport = async () => {
+    if (!simId) return;
+    try {
+      setExporting("distilling");
+      await api.post(`/simulation/${simId}/distill`);
+      setExporting("downloading");
+      const res = await api.get(`/simulation/${simId}/export`, {
+        responseType: "blob",
+        timeout: 60_000,
+      });
+      // Trigger browser download
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `twin-export.tar.gz`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setExporting("done");
+    } catch (err) {
+      console.error("Export failed:", err);
+      setExporting("idle");
     }
   };
 
@@ -268,6 +296,36 @@ export default function SimulationPanel({
           </div>
         )}
       </div>
+
+      {/* Export button — visible after simulation completes */}
+      {!running && simId && (
+        <div className="px-4 py-3 border-t border-zinc-800 shrink-0">
+          <button
+            onClick={handleExport}
+            disabled={exporting === "distilling" || exporting === "downloading"}
+            className={`w-full py-2 text-xs rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
+              exporting === "done"
+                ? "bg-emerald-800 text-emerald-200"
+                : exporting !== "idle"
+                ? "bg-zinc-700 text-zinc-400 cursor-wait"
+                : "bg-emerald-700 hover:bg-emerald-600 text-white"
+            }`}
+          >
+            {exporting === "idle" && "⬇ Save & Export as Container"}
+            {exporting === "distilling" && (
+              <>
+                <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Distilling rules...
+              </>
+            )}
+            {exporting === "downloading" && "Packaging..."}
+            {exporting === "done" && "✓ Downloaded — run with docker compose up"}
+          </button>
+          <p className="text-[10px] text-zinc-600 mt-1.5 text-center">
+            Exports a standalone Docker container with distilled rules — no LLM needed
+          </p>
+        </div>
+      )}
 
       {/* Live event feed */}
       <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
